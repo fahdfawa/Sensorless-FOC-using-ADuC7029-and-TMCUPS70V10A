@@ -1,0 +1,641 @@
+/////FOC CODE////													 							 
+
+#include <ADuC7026.h>
+#include <stdio.h>
+#include <math.h>	
+
+					// 	Include ADuC7028 Header File
+											
+//	Function Prototypes
+
+void My_IRQ_Function(void);					//	IRQ Function Prototype 
+			 	
+void delay(int);
+
+void SetPwmDutyCycle(unsigned char ucDutyCycle_A,unsigned char ucDutyCycle_B,unsigned char ucDutyCycle_C);
+
+void senddata(short to_send);
+
+void ADCpoweron(int);
+
+char hex2ascii(char toconv);
+
+int DoubleToFixed(double x); 
+
+int MULTIPLY(int x, int y);
+
+int DIVIDE(int x, int y);
+
+void clk_conf(void);
+
+void GPIO_conf(void);
+
+void PWM_conf(void);
+
+void ADC_conf(void);
+
+void UART_conf(void);
+
+void DAC_conf(void);
+
+void PWM_intr_route(void);
+
+void current_measurement(void);
+
+void Clarke_Trans(void);
+
+void Park_Trans(void);
+
+void OPEN_LOOP_RUN(int* sin_theta, int* cos_theta); 
+
+void CLOSED_LOOP_RUN(int theta_est, int W_e, int* I_QREF, int* SIN_THETA_CL, int* COS_THETA_CL);
+
+void PI_controller(int I_q, int I_qref, int I_d, int I_dref, int* Q_comp, int* D_comp);
+
+void ESTIMATOR1(int V_alpha, int V_beta, int I_alpha, int I_beta, int* SPEED_RAD_SEC, unsigned int* THETA_EST);
+
+void Inverse_Park(int V_q, int V_d, int sin_theta, int cos_theta, int* ALPHA_comp, int* BETA_comp);
+
+void Inverse_Clarke(int V_alpha, int V_beta, int* A_comp, int* B_comp, int* C_comp);
+
+void SVM(int V_aref, int V_bref, int V_cref, unsigned char* Da_on, unsigned char* Db_on, unsigned char* Dc_on);
+
+int Sin_Array[128] = {
+      0,   1606,   3210,   4806,   6392,   7960,   9510,  11038,  12538,  14008,
+  15446,  16844,  18204,  19518,  20786,  22004,  23168,  24278,  25328,  26318,
+  27244,  28104,  28896,  29620,  30272,  30850,  31356,  31784,  32136,  32412,
+  32608,  32726,  32766,  32726,  32608,  32412,  32136,  31784,  31356,  30850,
+  30272,  29620,  28896,  28104,  27244,  26318,  25328,  24278,  23168,  22004,
+  20786,  19518,  18204,  16844,  15446,  14008,  12538,  11038,   9510,   7960,
+   6392,   4806,   3210,   1606,      0,  -1608,  -3212,  -4808,  -6394,  -7962,
+  -9512, -11040, -12540, -14010, -15448, -16846, -18206, -19520, -20788, -22006,
+ -23170, -24280, -25330, -26320, -27246, -28106, -28898, -29622, -30274, -30852,
+ -31358, -31786, -32138, -32414, -32610, -32728, -32768, -32728, -32610, -32414,
+ -32138, -31786, -31358, -30852, -30274, -29622, -28898, -28106, -27246, -26320,
+ -25330, -24280, -23170, -22006, -20788, -19520, -18206, -16846, -15448, -14010,
+ -12540, -11040,  -9512,  -7962,  -6394,  -4808,  -3212,  -1608};			   
+
+int Cos_Array[128] = {
+  32766,  32726,  32608,  32412,  32136,  31784,  31356,  30850,  30272,  29620,  
+  28896,  28104,  27244,  26318,  25328,  24278,  23168,  22004,  20786,  19518,  
+  18204,  16844,  15446,  14008,  12538,  11038,   9510,   7960,   6392,   4806,
+   3210,   1606,      0,  -1608,  -3212,  -4808,  -6394,  -7962,  -9512, -11040,
+ -12540, -14010, -15448, -16846, -18206, -19520, -20788, -22006, -23170, -24280,
+ -25330, -26320, -27246, -28106, -28898, -29622, -30274, -30852, -31358, -31786,
+ -32138, -32414, -32610, -32728, -32768, -32728, -32610, -32414, -32138, -31786,
+ -31358, -30852, -30274, -29622, -28898, -28106, -27246, -26320, -25330, -24280, 
+ -23170, -22006, -20788, -19520, -18206, -16846, -15448, -14010, -12540, -11040,  
+  -9512,  -7962,  -6394,  -4808,  -3212,  -1608,      0,   1606,   3210,   4806,
+   6392,   7960,   9510,  11038,  12538,  14008,  15446,  16844,  18204,  19518, 
+  20786,  22004,  23168,  24278,  25328,  26318,  27244,  28104,  28896,  29620,  
+  30272,  30850,  31356,  31784,  32136,  32412,  32608,  32726};
+
+
+
+#define PWM_dead_time       0x020  /* set dead time to 1us */	  //dead_time = fclk/(2*PWMDAT1)	//0x20
+#define PWM_period          0x1000   /* set PWM freq to 20KHz */	  //PWM_freq = fclk/(2*PWMDAT0)	//0x1000
+#define PWM_SYNC_width      200
+
+#define kp_I  32767
+#define ki_I  10000
+
+#define kp_W_e 32767
+#define ki_W_e 10000
+
+#define scale               15
+
+#define V_dc_by_sqrt3       32767 //24 volt
+#define Ts                  32767 // 0.00005  should be changing
+#define T_sample            7018
+#define Vref                3413  // 2.5*32767/24
+#define Ls_dt               76410 //0.6mH per phase	Ls_dt = Ls(pu)/dt
+#define Rs                  8989 //0.36ohm per phase
+#define ONE_BY_Kb           8600
+
+ 
+
+
+#define SQUAREROOT_3_BY_2   28377
+#define ONE_BY_SQUAREROOT_3 18918
+#define ONE_BY_2            16384
+#define K_filter_dq         3998
+#define K_filter_vel_est    3998
+//unsigned int HUNDRED = 3276700;
+signed int MINUS_ONE = -32767;
+
+
+
+unsigned char Da_on, Db_on, Dc_on;
+unsigned char up, down;
+float i = 0.0;
+//unsigned char j = 10;
+
+unsigned int theta = 0;
+unsigned int theta_est = 0;
+signed int sin_theta = 0, cos_theta = 32767;
+
+int V_d, V_q, V_alpha, V_beta, V_aref, V_bref, V_cref;
+int E_alpha, E_beta, E_d, E_q, L, R;
+int E_df, E_qf;
+int err_d, err_prev_d, err_q,err_prev_q; 
+long int integral_d,  integral_q;
+int ta, tb, tc, t_min, t_max, t_effective, To, t_offset;
+unsigned int ta_on, tb_on, tc_on;
+
+unsigned int I_u_raw, I_w_raw;
+int I_u, I_v, I_w;
+int I_alpha, I_beta;
+int I_alpha_prev = 0;
+int I_beta_prev = 0;
+int I_d, I_q;
+//long int ONE_BY_Kb = 34901;
+
+
+float fund_freq_req = 100; // 32767*(127*1/20000)
+float fund_freq = 39.5;
+float ramp_value;
+float ramp_up_coeff	= 0.01;
+
+
+	 
+ // 2.0*32767/24  
+//int I_qref = 0;
+
+#define W_e_ref  3098
+ int err_W_e, err_prev_W_e, W_e, W_e_filt;
+ long int W_e_prev;
+ long int integral_W_e;
+ 
+int ramp_W_e = 628;
+ 
+int I_qref         =       9389;	 //31297 corresponds to 10A peak, since 3.15V corresponds to 10A, 3.3V corresponds to 10.47A = 32768
+int I_dref         =       0; 
+
+
+#define PWM_dead_time       0x020  /* set dead time to 1us */	  //dead_time = fclk/(2*PWMDAT1)	//0x20
+#define PWM_period          0x1000   /* set PWM freq to 20KHz */	  //PWM_freq = fclk/(2*PWMDAT0)	//0x1000
+#define PWM_SYNC_width      200
+
+
+
+
+
+
+
+
+
+
+int main (void)  
+{
+
+	IRQ = My_IRQ_Function;				// 	Specify Interrupt Service Rountine 
+
+	// clock configuration					
+		
+		clk_conf();
+	
+	//GPIO configurations for PWM and LED toggling
+		
+		GPIO_conf();
+	
+	// Setup the PWM	
+		
+		PWM_conf();
+		
+	//ADC configuration
+							    // connect internal reference of 2.5V to external VREF pin
+		ADCpoweron(20000);			     	// power on ADC		
+		
+		ADC_conf();					
+														
+	// Setup tx & rx pins on P1.0 and P1.1 and Start setting up UART at 9600bps
+		
+		UART_conf();
+	
+	// Setting up the DAC
+		
+		DAC_conf();
+								
+	// Routing the PWMSYNC pulse to PLAELM15	
+		
+		PWM_intr_route();
+	
+	//while loop
+		
+		while(1)
+		{
+			/*				 
+			if (PLAirqTrg == 1) {
+				PLAirqTrg = 0;
+				GP4DAT ^= 0x00080000;					// Complement P4.2
+			}
+			    delay(200000);
+			*/									//	Delay to make blink visible
+		}
+
+}
+
+
+/********************************************************************/
+/*                                                                  */
+/*		Interrupt Service Rountine									*/
+/*                                                                  */
+/********************************************************************/
+
+
+void My_IRQ_Function() {						// example with two IRQ
+	 /*		
+	 if ((IRQSTA & 0x080000) != 0) {	 		// PLA IRQ0?
+        if (i < 80){
+	    theta = i*4.5;
+    	}
+	    i++;
+        if (i == 80){i=0;}
+
+        PLAirqTrg = 1;	
+	    GP4DAT ^= 0x00080000;
+	 */
+// Current Measurement with ADC	
+		
+  	    current_measurement();
+			   
+// Clarke Transform
+
+	    Clarke_Trans();	
+		  
+// Parke Transform
+		
+	  	Park_Trans();
+	 
+	  // theta = i*2.8125
+
+	 
+if (ramp_value<fund_freq_req)
+ 
+{
+    
+      	ramp_value = ramp_value + ramp_up_coeff;
+		 
+	    OPEN_LOOP_RUN(&sin_theta, &cos_theta);   
+
+}
+
+else
+
+{
+
+        CLOSED_LOOP_RUN(theta_est, W_e, &I_qref, &sin_theta, &cos_theta);
+
+}
+	 	
+// PI Controller	 
+	   
+        PI_controller(I_q, I_qref, I_d, I_dref, &V_q, &V_d);
+	
+//	Estimator
+	
+		ESTIMATOR1(V_alpha, V_beta, I_alpha, I_beta, &W_e, &theta_est);
+				      
+// Inverse_Park_Transform
+         
+		Inverse_Park(V_q, V_d, sin_theta, cos_theta, &V_alpha, &V_beta);	
+  
+// Inverse Clarke Transform 
+	 
+        Inverse_Clarke(V_alpha, V_beta, &V_aref, &V_bref, &V_cref); 
+   
+// Space Vector
+	 
+		 SVM(V_aref, V_bref, V_cref, &Da_on, &Db_on, &Dc_on);
+
+// Setting PWM dut cycles	     
+		
+		 SetPwmDutyCycle(Da_on, Db_on, Dc_on);	
+ 	  
+	return ;
+} 
+
+/*---------------------------------------------------------------------------------------------*/
+/*                                        FUNCTIONS                                            */
+/*---------------------------------------------------------------------------------------------*/
+
+
+
+//SENDING DATA VIA UART 
+void senddata(short to_send)
+{
+	while(!(0x020==(COMSTA0 & 0x020))){}
+		COMTX = 0x0A;						// output LF 
+	while(!(0x020==(COMSTA0 & 0x020))){}
+		COMTX = 0x0D;	
+	while(!(0x020==(COMSTA0 & 0x020))){}
+		COMTX = hex2ascii ((to_send >> 12) & 0x0F);					// output CR 
+	while(!(0x020==(COMSTA0 & 0x020))){}
+		COMTX = hex2ascii ((to_send >> 8) & 0x0F);
+	while(!(0x020==(COMSTA0 & 0x020))){}
+		COMTX = hex2ascii ((to_send >> 4) & 0x0F);						
+	while(!(0x020==(COMSTA0 & 0x020))){}
+		COMTX = hex2ascii (to_send & 0x0F);							
+}
+
+
+char hex2ascii(char toconv)
+{
+	if (toconv<0x0A) 
+	{
+		toconv += 0x30;
+	}
+	else 
+	{
+		toconv += 0x37;
+	}
+	
+	return (toconv);
+}
+
+//DELAY FUNCTION
+void delay (int length) 
+{
+    while (length >=0)
+    length--;
+}
+
+
+//CONVERSION OF DOUBLE VARIABLE TO INT VARIABLE  
+
+int DoubleToFixed(double x)
+{
+    return (x * scale);	
+}
+													   																	
+//MULTIPLICATION OF TWO INTS TO GET A OUTPUT IN INT
+
+int MULTIPLY(int x,int y)
+{
+    return (((x)*(y))>>scale);
+}
+
+//  DIVISION OF TWO INTS TO GET A OUTPUT IN INT
+
+int DIVIDE(int x, int y)  // be careful that when we divide two fractions the value may go out of 1 
+{						   // then we have to define unsigned long int 
+    return ((x)<<scale)/(y);
+}
+
+// CALL FUNCTION TO PROVIDE DUTY CYCLE
+void SetPwmDutyCycle(unsigned char ucDutyCycle_A,unsigned char ucDutyCycle_B,unsigned char ucDutyCycle_C)
+{
+        PWMCH0 = PWM_dead_time + (PWM_period * ((signed int)ucDutyCycle_A - 50)) / 100;
+	PWMCH1 = PWM_dead_time + (PWM_period * ((signed int)ucDutyCycle_B - 50)) / 100;
+	PWMCH2 = PWM_dead_time + (PWM_period * ((signed int)ucDutyCycle_C - 50)) / 100;
+    return;
+}
+
+//CLOCK CONFIGURATION
+void clk_conf(void)
+{
+	POWKEY1 = 0x01;
+	POWCON  = 0x00;		   			    // 41.78MHz
+	POWKEY2 = 0xF4;
+
+	PLACLK = 0x30;
+	return;
+}
+
+//GPIO CONFIGURATION
+void GPIO_conf(void)
+{
+    GP3CON = 0x10111111;			    // Enable the PWM outputs to the GPIO
+    //GP4DAT = 0x0C000000;			    // P4.2 configured as an output. LED is turned on	
+	GP4DAT = 0x08000000;
+	return;
+}
+
+//PWM CONFIGURATION	 		
+void PWM_conf ()
+{    
+	PWMCON  = 0xB;   					// Ext ASYNC enabled
+	PWMDAT0 = PWM_period;    			// Period register 182uS
+	PWMDAT1 = PWM_dead_time;		    	// 1us Dead time
+	PWMDAT2 = PWM_SYNC_width;
+	return;
+}
+
+// ADCPOWERING ON FUNCTION
+void ADCpoweron(int time)
+{
+    REFCON = 0x01;
+	ADCCON = 0x20;	 					// power-on the ADC
+	while (time >=0)	  				// wait for ADC to be fully powered on
+    time--;
+}
+
+//ADC CONFIGURATION
+void ADC_conf(void)
+{
+    ADCCP =0;							// Conversion on ADC channel 0
+	ADCCON = 0x0E5;				        // ADC Config: fADC, acq. time = 2 clocks => ADC Speed = 1MSPS
+	PLAADC = 0x01F;				        // start conversion on Interrupt in PLAELM15     
+}
+
+//UART CONFIGURATION
+void UART_conf(void)
+{
+    GP1CON = 0x011;
+	GP0CON = 0x00003000;	
+	COMCON0 = 0x80;					    // Setting DLAB
+	COMDIV0 = 0x88;			
+   	COMDIV1 = 0x00;
+   	COMCON0 = 0x07;					    // Clearing DLAB
+}
+
+//DAC CONFIGURATION 
+void DAC_conf(void)
+{
+        DAC0CON = 0x13;			        // DAC configuration							/
+	DAC0DAT = 0x08000000;		    // start from midscale
+									//DACxCON[4]=clk speed
+	DAC1CON = 0x13;			    	// DAC configuration
+	DAC1DAT = 0x08000000;
+	
+        DAC2CON = 0x13;			    	// DAC configuration
+	DAC2DAT = 0x08000000;
+	
+	DAC3CON = 0x13;			    	// DAC configuration
+	DAC3DAT = 0x08000000;		    // range AVdd/AGND and Clocked
+}
+
+//PWM INTERRUPT ROUTING TO PLA
+void PWM_intr_route(void)
+{
+    PLAELM15 = 0x0035; 							// Configure individual elements
+	PLAIRQ = 0x001F; 							// IRQ output configuration
+	IRQEN = 0x080000;			            	//	Enable XIRQ0 & Uart in IRQEnable
+}
+
+void current_measurement(void)
+{
+//READING ADC VALUE FROM CHANNEL 0										
+
+		ADCCP = 0;
+		ADCCON = 0X0E5;	
+		while(!ADCSTA){}
+	    I_u_raw = ADCDAT;
+	    ADCCON = 0x065;
+
+//READING ADC VALUE FROM CHANNEL 1
+					
+	    ADCCP = 1;	
+	    ADCCON = 0X0E5;
+		while(!ADCSTA){}
+	    I_w_raw = ADCDAT;
+	    ADCCON = 0X065;
+//Converting value from 0 o 4096 to -4096 to 4096 			   
+		
+		//I_u = DIVIDE(MULTIPLY(DAC0DAT>>16,65536),4096) - 32767;
+		//I_w = DIVIDE(MULTIPLY(DAC1DAT>>16,65536),4096) - 32767;
+		I_u = ((I_u_raw>>16)-2048)*16;
+		I_w = ((I_w_raw>>16)-2048)*16;
+		I_v = -(I_u + I_w);
+}
+
+void Clarke_Trans(void)
+{
+        I_alpha = I_u;
+		I_beta  = MULTIPLY(I_u,ONE_BY_SQUAREROOT_3) + DIVIDE(I_v,SQUAREROOT_3_BY_2);
+}
+
+void Park_Trans(void)
+{
+        I_d = MULTIPLY(I_alpha, cos_theta) + MULTIPLY(I_beta, sin_theta);
+		I_q = MULTIPLY(I_beta, cos_theta) - MULTIPLY(I_alpha, sin_theta);
+
+		if(I_d>29789){I_d = 29789;}	  // 10A corresponds to 1.5V == 1.5 +(3.3/2) = 3.15, 3.15*32767/3.3 = 30192
+		if(I_q>29789){I_q = 29789;}
+	   //I_d = MULTIPLY(I_d,3276);
+	   //DAC2DAT = (I_d<<16);
+}
+
+
+void OPEN_LOOP_RUN(int* SIN_THETA, int* COS_THETA)	  //NOTE: This function consists of two returns, so we use call by address method
+{
+if (i<127)
+	 {
+	
+		up = ceil(i);
+		down = floor(i);
+		*SIN_THETA = Sin_Array[down] + MULTIPLY((Sin_Array[up] - Sin_Array[down]),(i - down)*32767);
+		*COS_THETA = Cos_Array[down] + MULTIPLY((Cos_Array[up] - Cos_Array[down]),(i - down)*32767);
+     }
+		
+	    i = i + (ramp_value/fund_freq);
+		
+	  if (i>=127){i=0.0;}
+
+}
+
+void CLOSED_LOOP_RUN(int theta_est, int W_e, int* I_QREF, int* SIN_THETA_CL, int* COS_THETA_CL)
+{
+        i = theta_est/266;	 
+				 	 
+		up = ceil(i);
+		down = floor(i);
+		*SIN_THETA_CL = Sin_Array[down] + MULTIPLY((Sin_Array[up] - Sin_Array[down]),(i - down)*32767);
+		*COS_THETA_CL = Cos_Array[down] + MULTIPLY((Cos_Array[up] - Cos_Array[down]),(i - down)*32767);
+		
+		if (i>=127){i=0.0;}
+		
+	
+		err_W_e = W_e_ref - W_e;
+		integral_W_e = integral_W_e + MULTIPLY(err_W_e,ki_W_e) + MULTIPLY(err_prev_W_e,ki_W_e);
+		err_prev_W_e =err_W_e;
+		*I_QREF = MULTIPLY(err_W_e,kp_W_e) + integral_W_e;
+	
+		if (*I_QREF>32767){*I_QREF=32767;}
+	    if (*I_QREF<-32767){*I_QREF=-32767;} //Saturation limit
+}	
+
+void PI_controller(int I_q, int I_qref, int I_d, int I_dref, int* Q_comp, int* D_comp)
+{
+        err_q = I_qref - I_q;
+		integral_q = integral_q + MULTIPLY(err_q,ki_I) + MULTIPLY(err_prev_q,ki_I);
+		err_prev_q =err_q;
+
+	    *Q_comp = MULTIPLY(err_q,kp_I) + integral_q;
+
+		if (*Q_comp>32767){*Q_comp = 32767;}
+		if (*Q_comp<-32767){*Q_comp = -32767;} //Saturation limit
+
+		err_d = I_dref - I_d;
+		integral_d = integral_d + MULTIPLY(err_d,ki_I) + MULTIPLY(err_prev_d,ki_I);
+		err_prev_d =err_d;
+		
+	    *D_comp = MULTIPLY(err_d,kp_I) + integral_d;
+
+        //DAC1DAT = (V_d/8)<<16; 
+
+		if (*D_comp>32767){*D_comp=32767;}
+		if (*D_comp<-32767){*D_comp=-32767;} //Saturation limit
+		//*D_comp = 0; //v_d =9 volts, Voltage_rated =24V
+		//V_q = 10000;  
+}	
+
+void Inverse_Park(int V_q, int V_d, int sin_theta, int cos_theta, int* ALPHA_comp, int* BETA_comp)
+{
+         *ALPHA_comp = MULTIPLY(V_d,cos_theta) - MULTIPLY(V_q,sin_theta);
+	     *BETA_comp  = MULTIPLY(V_d,sin_theta) + MULTIPLY(V_q,cos_theta);
+		 //senddata(V_alpha);
+		 //senddata(V_beta);	
+} 
+
+void ESTIMATOR1(int V_alpha, int V_beta, int I_alpha, int I_beta, int* SPEED_RAD_SEC, unsigned int* THETA_EST)
+{
+        E_alpha = V_alpha - MULTIPLY(I_alpha, Rs) - MULTIPLY(Ls_dt, (I_alpha - I_alpha_prev));
+		E_beta  = V_beta  - MULTIPLY(I_beta,  Rs) - MULTIPLY(Ls_dt, (I_beta  - I_beta_prev ));
+	
+		I_alpha_prev = I_alpha;
+		I_beta_prev = I_beta;
+	
+		E_d = MULTIPLY(E_alpha,cos_theta) + MULTIPLY(E_beta,  sin_theta);
+		E_q = MULTIPLY(E_beta ,cos_theta) - MULTIPLY(E_alpha, sin_theta);
+
+		E_df = E_df + MULTIPLY((E_d - E_df),K_filter_dq);	//filtered Ed
+	    E_qf = E_qf + MULTIPLY((E_q - E_qf),K_filter_dq);	//filtered Eq
+
+		//DAC0DAT = (E_d/8)<<16;
+		//DAC1DAT = (E_df/8)<<16;
+		//add filter
+	
+	    if (E_qf>0){ *SPEED_RAD_SEC = MULTIPLY((E_qf - E_df), ONE_BY_Kb);}
+		if (E_qf<0){ *SPEED_RAD_SEC = MULTIPLY((E_qf + E_df), ONE_BY_Kb);};
+
+		W_e_filt = W_e_filt + MULTIPLY((*SPEED_RAD_SEC - W_e_filt),K_filter_vel_est); //filtered value
+	 
+		*THETA_EST = *THETA_EST + MULTIPLY(W_e_filt,T_sample);
+        if (*THETA_EST>32767){*THETA_EST =0;}
+		
+		theta = (i*256);
+		if (theta>32767){theta=0;}
+}
+
+
+void Inverse_Clarke(int V_alpha, int V_beta, int* A_comp, int* B_comp, int* C_comp)
+{
+        *A_comp =   V_alpha;
+        *B_comp =   ((SQUAREROOT_3_BY_2*V_beta)>>scale) - ((V_alpha*ONE_BY_2)>>scale);
+        *C_comp =   MULTIPLY(MINUS_ONE,(((V_alpha*ONE_BY_2)>>scale)+((SQUAREROOT_3_BY_2*V_beta)>>scale)));
+}
+
+void SVM(int V_aref, int V_bref, int V_cref, unsigned char* Da_on, unsigned char* Db_on, unsigned char* Dc_on)
+{
+         ta_on = V_aref + Ts;  // since the maximum we have to shift the time axis up we are adding 32767 i.e. Ts
+		 tb_on = V_bref + Ts;  // so ta_on will be varying from 0 to 65536. So we have to divide by 655 to convert it into duty cycle.
+		 tc_on = V_cref + Ts;
+
+		 *Da_on = ta_on/655;                  
+		 *Db_on = tb_on/655;  
+		 *Dc_on = tc_on/655;  
+
+ 		 //senddata(t_offset);
+		 //senddata(ta_on);	
+}		 	 
